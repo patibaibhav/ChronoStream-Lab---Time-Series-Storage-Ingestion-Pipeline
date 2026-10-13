@@ -1,3 +1,3 @@
 # Backend
 
-This package currently exposes an application placeholder and the validated simulation-settings contract used by later API and engine tasks. Engine modules, API routes, and persistence will be introduced in their scheduled tasks.
+This package currently exposes an application placeholder, the validated simulation-settings contract, and a deterministic record generator. Queueing, validation, API routes, and persistence will be introduced in their scheduled tasks.
