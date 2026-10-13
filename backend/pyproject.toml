@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "time-series-virtual-lab-backend"
+version = "0.1.0"
+description = "Local backend placeholder for the Time-Series Virtual Lab"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi==0.115.12",
+    "uvicorn[standard]==0.34.2",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest==8.3.5",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

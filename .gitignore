@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+.venv/
+venv/
+*.egg-info/
+build/
+
+# Node.js
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Local configuration
+.env
+.env.*
+!.env.example
+
+# Runtime artifacts
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.parquet
+spool/
+exports/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

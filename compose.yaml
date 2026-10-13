@@ -1,0 +1,25 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    environment:
+      APP_ENV: development
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+      DATA_DIR: /app/data
+      DATABASE_URL: sqlite:////app/data/lab.sqlite
+      SIMULATION_MODE: local
+      LOG_LEVEL: INFO
+      CORS_ORIGINS: http://localhost:5173
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+
+  frontend:
+    build:
+      context: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:80"
