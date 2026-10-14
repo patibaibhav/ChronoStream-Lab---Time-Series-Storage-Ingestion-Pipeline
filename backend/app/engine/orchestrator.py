@@ -1,7 +1,7 @@
 """Synchronous, API-independent orchestration of one simulation run."""
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event, Lock
 
@@ -13,6 +13,7 @@ from app.engine.generator import SeededRecordGenerator
 from app.engine.local_writer import LocalParquetWriter
 from app.engine.queue import BoundedStreamQueue
 from app.engine.validator import RecordValidator
+from app.storage.metadata import SQLiteMetadataRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,9 +41,11 @@ class SimulationEngine:
         data_dir: Path,
         *,
         retry_policy: RetryPolicy | None = None,
+        metadata_repository: SQLiteMetadataRepository | None = None,
     ) -> None:
         self._settings = settings
         self._data_dir = data_dir
+        self._metadata = metadata_repository or SQLiteMetadataRepository(data_dir / "lab.sqlite")
         self._lock = Lock()
         self._stop_requested = Event()
         self._running = False
@@ -81,6 +84,11 @@ class SimulationEngine:
             writer,
             self._retry_policy or RetryPolicy(),
         )
+        self._metadata.create_run(
+            run_id,
+            datetime.now(UTC),
+            self._settings.model_dump(mode="json"),
+        )
 
         generated = 0
         persisted: list[Chunk] = []
@@ -101,6 +109,11 @@ class SimulationEngine:
                 )
                 self._persist_chunks(expired, persisted, failed)
         finally:
+            self._metadata.finish_run(
+                run_id,
+                datetime.now(UTC),
+                "stopped" if self._stop_requested.is_set() else "completed",
+            )
             with self._lock:
                 self._running = False
 
@@ -144,8 +157,23 @@ class SimulationEngine:
         if raw_record is None:
             return
         result = self._validator.validate(raw_record)
+        payload = raw_record.to_dict() if hasattr(raw_record, "to_dict") else None
+        self._metadata.record_event(
+            self._run_id,
+            result.record.event_id if result.record is not None else None,
+            "accepted" if result.accepted else "rejected",
+            result.reason.value if result.reason is not None else None,
+            payload,
+        )
         if not result.accepted or result.record is None:
             return
+        self._metadata.record_metric_sample(
+            self._run_id,
+            result.record.event_id,
+            result.record.metric,
+            result.record.value,
+            result.record.timestamp,
+        )
         append_result = self._buffer.append(result.record)
         if not append_result.accepted:
             raise RuntimeError(f"buffer rejected a validated record: {append_result.reason}")
@@ -169,5 +197,17 @@ class SimulationEngine:
             lifecycle = self._lifecycle.persist(chunk)
             if lifecycle.state is ChunkState.PERSISTED:
                 persisted.append(chunk)
+                self._metadata.record_chunk(
+                    self._run_id,
+                    chunk,
+                    lifecycle.state.value,
+                    lifecycle.persisted_chunk,
+                )
             elif lifecycle.state is ChunkState.FAILED:
                 failed.append(chunk)
+                self._metadata.record_chunk(
+                    self._run_id,
+                    chunk,
+                    lifecycle.state.value,
+                    error=lifecycle.last_error,
+                )

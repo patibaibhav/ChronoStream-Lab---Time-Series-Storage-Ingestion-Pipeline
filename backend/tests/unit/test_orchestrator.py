@@ -4,6 +4,7 @@ from time import sleep
 
 from app.core.config import ChunkingSettings, SimulationSettings
 from app.engine.orchestrator import SimulationEngine
+from app.storage.metadata import SQLiteMetadataRepository
 
 
 def test_engine_runs_all_pipeline_stages_and_persists_chunks(tmp_path: Path) -> None:
@@ -23,6 +24,10 @@ def test_engine_runs_all_pipeline_stages_and_persists_chunks(tmp_path: Path) -> 
     assert summary.stopped is False
     assert len(summary.chunk_ids) == 4
     assert len(list(tmp_path.glob("parquet/run_run-1/*.parquet"))) == 4
+    metadata = SQLiteMetadataRepository(tmp_path / "lab.sqlite")
+    assert metadata.count("events", "run-1") == 5
+    assert metadata.count("metric_samples", "run-1") == 5
+    assert metadata.count("chunks", "run-1") == 4
 
 
 def test_engine_can_be_stopped_cleanly(tmp_path: Path) -> None:
