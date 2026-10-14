@@ -71,7 +71,7 @@ class SeededRecordGenerator:
         self._settings = settings
         self._start_at = start_at.astimezone(UTC)
 
-    def generate(self, count: int) -> Iterator[TimeSeriesRecord]:
+    def generate(self, count: int) -> Iterator[TimeSeriesRecord | dict[str, object]]:
         """Yield ``count`` records, restarting deterministically on every call."""
 
         if isinstance(count, bool) or not isinstance(count, int):
@@ -94,14 +94,25 @@ class SeededRecordGenerator:
                     ),
                 )
             )
-            yield TimeSeriesRecord(
-                event_id=event_id,
-                device_id=device_id,
-                metric=metric,
-                value=value,
-                timestamp=timestamp,
-                ingested_at=timestamp + SIMULATED_INGEST_DELAY,
-            )
+            if (
+                self._settings.invalid_record_ratio > 0
+                and random.random() < self._settings.invalid_record_ratio
+            ):
+                yield {
+                    "event_id": event_id,
+                    "device_id": device_id,
+                    "metric": metric,
+                    "timestamp": _format_utc(timestamp),
+                }
+            else:
+                yield TimeSeriesRecord(
+                    event_id=event_id,
+                    device_id=device_id,
+                    metric=metric,
+                    value=value,
+                    timestamp=timestamp,
+                    ingested_at=timestamp + SIMULATED_INGEST_DELAY,
+                )
             timestamp += timedelta(
                 seconds=1 / (self._settings.records_per_second * self._rate_multiplier(sequence_number, count))
             )

@@ -144,6 +144,10 @@ class SimulationEngine:
     def running(self) -> bool:
         return self._running
 
+    @property
+    def metrics(self) -> MetricsSnapshot:
+        return self._metrics.snapshot()
+
     def _offer_and_process(
         self,
         source_record: object,

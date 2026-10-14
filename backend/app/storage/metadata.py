@@ -154,6 +154,29 @@ class SQLiteMetadataRepository:
             for row in rows
         ]
 
+    def list_events(self, run_id: str | None = None) -> list[dict[str, object]]:
+        statement = (
+            "SELECT run_id, event_id, status, reason, payload_json "
+            "FROM events"
+        )
+        parameters: tuple[object, ...] = ()
+        if run_id is not None:
+            statement += " WHERE run_id = ?"
+            parameters = (run_id,)
+        statement += " ORDER BY id DESC LIMIT 100"
+        with self._connect() as connection:
+            rows = connection.execute(statement, parameters).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "event_id": row[1],
+                "status": row[2],
+                "reason": row[3],
+                "payload": json.loads(row[4]) if row[4] else None,
+            }
+            for row in rows
+        ]
+
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.executescript(

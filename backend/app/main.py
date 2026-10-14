@@ -3,9 +3,12 @@
 import os
 from pathlib import Path
 from threading import Lock, Thread
+from asyncio import sleep
+from contextlib import suppress
 
 from fastapi import FastAPI
-from fastapi import HTTPException, WebSocket
+from fastapi import HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import SimulationSettings
@@ -56,6 +59,10 @@ class LabController:
             )
             self._thread.start()
 
+    @property
+    def metrics(self) -> object:
+        return self._engine.metrics if self._engine is not None else None
+
     def stop(self) -> None:
         with self._lock:
             if self._engine is None or not self.running:
@@ -66,6 +73,7 @@ class LabController:
         if self._engine is None:
             return
         self._summary = self._engine.run(run_id, record_count)
+        snapshots.publish({"type": "run_completed", "run_id": run_id, "summary": self._summary})
 
 
 controller = LabController(Path(os.getenv("DATA_DIR", "data")))
@@ -97,7 +105,7 @@ def stop_run() -> dict[str, str]:
 @app.get("/api/runs/status")
 def run_status() -> dict[str, object]:
     if controller.running:
-        return {"status": "running"}
+        return {"status": "running", "metrics": controller.metrics}
     if controller._summary is not None:
         return {"status": "completed", "summary": controller._summary}
     return {"status": "idle"}
@@ -113,19 +121,38 @@ def chunks(run_id: str | None = None) -> list[dict[str, object]]:
     return controller.metadata.list_chunks(run_id)
 
 
+@app.get("/api/events")
+def events(run_id: str | None = None) -> list[dict[str, object]]:
+    return controller.metadata.list_events(run_id)
+
+
+@app.get("/api/chunks/{chunk_id}/download")
+def download_chunk(chunk_id: str) -> FileResponse:
+    chunk = next(
+        (item for item in controller.metadata.list_chunks() if item["chunk_id"] == chunk_id),
+        None,
+    )
+    if chunk is None or chunk["path"] is None:
+        raise HTTPException(status_code=404, detail="chunk file not found")
+    path = Path(str(chunk["path"])).resolve()
+    data_root = controller.data_dir.resolve()
+    if data_root not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail="chunk file not found")
+    return FileResponse(path, media_type="application/octet-stream", filename=path.name)
+
+
 @app.get("/api/presets")
 def presets() -> dict[str, SimulationSettings]:
     return {"default": SimulationSettings()}
 
 
-@app.get("/api/events")
-def events() -> tuple[dict[str, object], ...]:
-    return snapshots.snapshot()
-
-
 @app.websocket("/api/ws")
 async def websocket_snapshots(websocket: WebSocket) -> None:
     await websocket.accept()
-    await websocket.send_json({"events": snapshots.snapshot()})
-    while True:
-        await websocket.receive_text()
+    try:
+        while True:
+            await websocket.send_json({"events": snapshots.snapshot()})
+            await sleep(1)
+    except (WebSocketDisconnect, RuntimeError):
+        with suppress(Exception):
+            await websocket.close()
