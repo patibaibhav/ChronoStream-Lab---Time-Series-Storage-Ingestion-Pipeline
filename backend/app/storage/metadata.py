@@ -177,6 +177,52 @@ class SQLiteMetadataRepository:
             for row in rows
         ]
 
+    def get_event(self, event_id: str) -> dict[str, object] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT run_id, event_id, status, reason, payload_json
+                FROM events
+                WHERE event_id = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (event_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "run_id": row[0],
+            "event_id": row[1],
+            "status": row[2],
+            "reason": row[3],
+            "payload": json.loads(row[4]) if row[4] else None,
+        }
+
+    def run_summary(self, run_id: str) -> dict[str, object]:
+        with self._connect() as connection:
+            event_counts = connection.execute(
+                "SELECT status, COUNT(*) FROM events WHERE run_id = ? GROUP BY status",
+                (run_id,),
+            ).fetchall()
+            chunk_summary = connection.execute(
+                """
+                SELECT COUNT(*), COALESCE(SUM(record_count), 0)
+                FROM chunks
+                WHERE run_id = ? AND status = 'persisted'
+                """,
+                (run_id,),
+            ).fetchone()
+        counts = {str(status): int(count) for status, count in event_counts}
+        return {
+            "run_id": run_id,
+            "input_records": sum(counts.values()),
+            "accepted_records": counts.get("accepted", 0),
+            "rejected_records": counts.get("rejected", 0),
+            "persisted_chunks": int(chunk_summary[0]),
+            "persisted_records": int(chunk_summary[1]),
+        }
+
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.executescript(

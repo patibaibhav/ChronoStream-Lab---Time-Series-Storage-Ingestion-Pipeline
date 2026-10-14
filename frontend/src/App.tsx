@@ -6,6 +6,8 @@ type Metrics = { input_records: number; persisted_records: number; rejected_reco
 type Status = { status: string; metrics?: Metrics; summary?: { accepted_records: number; persisted_records: number; persisted_chunks: number; metrics: Metrics } }
 type Chunk = { chunk_id: string; status: string; record_count: number; byte_size?: number }
 type Event = { run_id: string; event_id?: string; status: string; reason?: string; payload?: { metric?: string; value?: number } | null }
+type Run = { run_id: string; started_at: string; finished_at?: string; status: string }
+type Comparison = { run_id: string; baseline_run_id: string; metrics: Record<string, { current: number; baseline: number; delta: number }> }
 
 const nodes = ['Generator', 'Queue', 'Processor', 'Buffer', 'Chunk Builder', 'Parquet Writer', 'Local Storage']
 
@@ -31,17 +33,22 @@ export function App() {
   const [invalidRatio, setInvalidRatio] = useState(0)
   const [eventFilter, setEventFilter] = useState('all')
   const [selectedChunk, setSelectedChunk] = useState<Chunk | null>(null)
+  const [selectedEvent, setSelectedEvent] = useState<Event | null>(null)
+  const [runs, setRuns] = useState<Run[]>([])
+  const [comparison, setComparison] = useState<Comparison | null>(null)
 
   const refresh = useCallback(async () => {
     try {
-      const [nextStatus, nextChunks, nextEvents] = await Promise.all([
+      const [nextStatus, nextChunks, nextEvents, nextRuns] = await Promise.all([
         request('/api/runs/status') as Promise<Status>,
         request('/api/chunks') as Promise<Chunk[]>,
         request('/api/events') as Promise<Event[]>,
+        request('/api/runs/history') as Promise<Run[]>,
       ])
       setStatus(nextStatus)
       setChunks(nextChunks)
       setEvents(nextEvents)
+      setRuns(nextRuns)
       setConnected(true)
       setError('')
     } catch (cause) {
@@ -83,6 +90,18 @@ export function App() {
       await refresh()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to stop run')
+    }
+  }
+
+  const compareLatestRuns = async () => {
+    if (runs.length < 2) return
+    try {
+      setComparison(await request(
+        `/api/runs/compare?run_id=${encodeURIComponent(runs[0].run_id)}&baseline_run_id=${encodeURIComponent(runs[1].run_id)}`,
+      ) as Comparison)
+      setError('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to compare runs')
     }
   }
 
@@ -139,13 +158,19 @@ export function App() {
         </article>
         <article className="panel">
           <div className="section-title"><h2>Event log</h2><select aria-label="Event filter" value={eventFilter} onChange={(event) => setEventFilter(event.target.value)}><option value="all">All events</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option><option value="invalid_type">Invalid type</option></select></div>
-          {visibleEvents.length === 0 ? <p className="empty">No events yet.</p> : <ul className="event-list">{visibleEvents.slice(0, 12).map((event, index) => <li key={`${event.event_id ?? 'event'}-${index}`}><b className={event.status}>{event.status}</b><span>{event.reason ?? event.payload?.metric ?? 'pipeline event'}</span></li>)}</ul>}
+          {visibleEvents.length === 0 ? <p className="empty">No events yet.</p> : <ul className="event-list">{visibleEvents.slice(0, 12).map((event, index) => <li key={`${event.event_id ?? 'event'}-${index}`} onClick={() => setSelectedEvent(event)}><b className={event.status}>{event.status}</b><span>{event.reason ?? event.payload?.metric ?? 'pipeline event'}</span></li>)}</ul>}
+          {selectedEvent && <div className="inspector"><strong>Record inspection</strong><code>{selectedEvent.event_id ?? 'event'}</code><span>{selectedEvent.status} · {selectedEvent.reason ?? 'accepted'}</span><pre>{JSON.stringify(selectedEvent.payload, null, 2)}</pre></div>}
         </article>
         <article className="panel storage-panel">
           <div className="section-title"><h2>Storage explorer</h2><span>{chunks.length} chunks</span></div>
           {displayChunks.length === 0 ? <p className="empty">No Parquet chunks yet.</p> : <ul className="chunk-list">{displayChunks.map((chunk) => <li key={chunk.chunk_id} onClick={() => setSelectedChunk(chunk)}><code>{chunk.chunk_id.slice(0, 12)}</code><span>{chunk.record_count} records</span><b>{chunk.status}</b></li>)}</ul>}
           {selectedChunk && <div className="inspector"><strong>Selected chunk</strong><code>{selectedChunk.chunk_id}</code><span>{selectedChunk.byte_size ?? 0} bytes · {selectedChunk.record_count} records</span><a href={`${API_URL}/api/chunks/${selectedChunk.chunk_id}/download`} download>Download Parquet</a></div>}
         </article>
+      </section>
+      <section className="panel history-panel">
+        <div className="section-title"><h2>Run history</h2><a href={`${API_URL}/api/runs/export`} download>Export CSV</a></div>
+        {runs.length < 2 ? <p className="empty">Complete two runs to compare them.</p> : <button type="button" className="secondary" onClick={compareLatestRuns}>Compare latest run with previous</button>}
+        {comparison && <div className="comparison">{Object.entries(comparison.metrics).map(([name, value]) => <span key={name}><b>{name.replaceAll('_', ' ')}</b>{value.current} vs {value.baseline} ({value.delta >= 0 ? '+' : ''}{value.delta})</span>)}</div>}
       </section>
     </main>
   )

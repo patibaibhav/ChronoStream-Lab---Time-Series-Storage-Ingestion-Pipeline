@@ -1,6 +1,8 @@
 """ASGI application and minimal REST control surface for the local lab."""
 
 import os
+import csv
+import io
 from pathlib import Path
 from threading import Lock, Thread
 from asyncio import sleep
@@ -8,7 +10,7 @@ from contextlib import suppress
 
 from fastapi import FastAPI
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.core.config import SimulationSettings
@@ -124,6 +126,69 @@ def chunks(run_id: str | None = None) -> list[dict[str, object]]:
 @app.get("/api/events")
 def events(run_id: str | None = None) -> list[dict[str, object]]:
     return controller.metadata.list_events(run_id)
+
+
+@app.get("/api/events/{event_id}")
+def event_detail(event_id: str) -> dict[str, object]:
+    event = controller.metadata.get_event(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="event not found")
+    return event
+
+
+@app.get("/api/runs/compare")
+def compare_runs(run_id: str, baseline_run_id: str) -> dict[str, object]:
+    runs = {str(run["run_id"]): run for run in controller.metadata.list_runs()}
+    if run_id not in runs:
+        raise HTTPException(status_code=404, detail="run not found")
+    if baseline_run_id not in runs:
+        raise HTTPException(status_code=404, detail="baseline run not found")
+    current = controller.metadata.run_summary(run_id)
+    baseline = controller.metadata.run_summary(baseline_run_id)
+    metrics = {
+        key: {
+            "current": current[key],
+            "baseline": baseline[key],
+            "delta": current[key] - baseline[key],
+        }
+        for key in (
+            "input_records",
+            "accepted_records",
+            "rejected_records",
+            "persisted_chunks",
+            "persisted_records",
+        )
+    }
+    return {"run_id": run_id, "baseline_run_id": baseline_run_id, "metrics": metrics}
+
+
+@app.get("/api/runs/export")
+def export_runs() -> StreamingResponse:
+    output = io.StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "run_id",
+            "started_at",
+            "finished_at",
+            "status",
+            "input_records",
+            "accepted_records",
+            "rejected_records",
+            "persisted_chunks",
+            "persisted_records",
+        ],
+    )
+    writer.writeheader()
+    for run in controller.metadata.list_runs():
+        row = {key: run[key] for key in writer.fieldnames if key in run}
+        row.update(controller.metadata.run_summary(str(run["run_id"])))
+        writer.writerow(row)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=chronostream-runs.csv"},
+    )
 
 
 @app.get("/api/chunks/{chunk_id}/download")

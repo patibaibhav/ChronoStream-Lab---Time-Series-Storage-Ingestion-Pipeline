@@ -68,6 +68,13 @@ select { background: #101923; border: 1px solid #3b526b; border-radius: 6px; col
 .inspector { border-top: 1px solid #2b3b4e; display: grid; gap: .45rem; margin-top: .5rem; padding-top: .9rem; }
 .inspector span { color: #9eafc4; font-size: .8rem; }
 .inspector a { color: #61e7bf; font-size: .85rem; }
+.inspector pre { background: #101923; border-radius: 6px; color: #c8d5e3; font-size: .72rem; margin: 0; max-height: 10rem; overflow: auto; padding: .65rem; white-space: pre-wrap; }
+.event-list li { cursor: pointer; }
+.history-panel { margin-top: 1.2rem; }
+.history-panel a { color: #61e7bf; font-size: .85rem; }
+.comparison { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: 1rem; }
+.comparison span { background: #203246; border-radius: 6px; color: #c8d5e3; display: grid; gap: .25rem; padding: .6rem; font-size: .78rem; }
+.comparison b { color: #61e7bf; text-transform: capitalize; }
 .alert { background: #4a2830; border: 1px solid #b95865; border-radius: 8px; margin-bottom: 1rem; padding: .8rem 1rem; }
 @media (max-width: 700px) {
   .hero, .metrics, .split { flex-direction: column; }
