@@ -12,6 +12,7 @@ packaging==26.3
 pluggy==1.6.0
 pydantic==2.14.1
 pydantic_core==2.50.1
+pyarrow==18.1.0
 pytest==8.3.5
 python-dotenv==1.2.4
 PyYAML==6.0.3
