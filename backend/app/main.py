@@ -5,10 +5,11 @@ from pathlib import Path
 from threading import Lock, Thread
 
 from fastapi import FastAPI
-from fastapi import HTTPException
+from fastapi import HTTPException, WebSocket
 from pydantic import BaseModel, Field
 
 from app.core.config import SimulationSettings
+from app.api.websocket import SnapshotHub
 from app.engine.orchestrator import RunSummary, SimulationEngine
 from app.storage.metadata import SQLiteMetadataRepository
 
@@ -68,6 +69,7 @@ class LabController:
 
 
 controller = LabController(Path(os.getenv("DATA_DIR", "data")))
+snapshots = SnapshotHub()
 
 
 @app.get("/health")
@@ -114,3 +116,16 @@ def chunks(run_id: str | None = None) -> list[dict[str, object]]:
 @app.get("/api/presets")
 def presets() -> dict[str, SimulationSettings]:
     return {"default": SimulationSettings()}
+
+
+@app.get("/api/events")
+def events() -> tuple[dict[str, object], ...]:
+    return snapshots.snapshot()
+
+
+@app.websocket("/api/ws")
+async def websocket_snapshots(websocket: WebSocket) -> None:
+    await websocket.accept()
+    await websocket.send_json({"events": snapshots.snapshot()})
+    while True:
+        await websocket.receive_text()
