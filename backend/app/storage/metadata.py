@@ -111,6 +111,49 @@ class SQLiteMetadataRepository:
             ).fetchone()
         return int(row[0])
 
+    def list_runs(self) -> list[dict[str, object]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT run_id, started_at, finished_at, status, settings_json "
+                "FROM runs ORDER BY started_at DESC"
+            ).fetchall()
+        return [
+            {
+                "run_id": row[0],
+                "started_at": row[1],
+                "finished_at": row[2],
+                "status": row[3],
+                "settings": json.loads(row[4]),
+            }
+            for row in rows
+        ]
+
+    def list_chunks(self, run_id: str | None = None) -> list[dict[str, object]]:
+        statement = (
+            "SELECT chunk_id, run_id, status, record_count, path, byte_size, checksum, error "
+            "FROM chunks"
+        )
+        parameters: tuple[object, ...] = ()
+        if run_id is not None:
+            statement += " WHERE run_id = ?"
+            parameters = (run_id,)
+        statement += " ORDER BY rowid DESC"
+        with self._connect() as connection:
+            rows = connection.execute(statement, parameters).fetchall()
+        return [
+            {
+                "chunk_id": row[0],
+                "run_id": row[1],
+                "status": row[2],
+                "record_count": row[3],
+                "path": row[4],
+                "byte_size": row[5],
+                "checksum": row[6],
+                "error": row[7],
+            }
+            for row in rows
+        ]
+
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.executescript(
