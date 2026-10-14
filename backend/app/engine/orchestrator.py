@@ -11,6 +11,7 @@ from app.engine.chunk_builder import Chunk, ChunkBuilder
 from app.engine.chunk_lifecycle import ChunkLifecycleManager, ChunkState, RetryPolicy
 from app.engine.generator import SeededRecordGenerator
 from app.engine.local_writer import LocalParquetWriter
+from app.engine.metrics import MetricsCollector, MetricsSnapshot
 from app.engine.queue import BoundedStreamQueue
 from app.engine.validator import RecordValidator
 from app.storage.metadata import SQLiteMetadataRepository
@@ -30,6 +31,7 @@ class RunSummary:
     persisted_records: int
     stopped: bool
     chunk_ids: tuple[str, ...]
+    metrics: MetricsSnapshot
 
 
 class SimulationEngine:
@@ -56,6 +58,7 @@ class SimulationEngine:
         self._run_id = ""
         self._builder: ChunkBuilder | None = None
         self._lifecycle: ChunkLifecycleManager | None = None
+        self._metrics = MetricsCollector()
 
         self._retry_policy = retry_policy
 
@@ -84,6 +87,7 @@ class SimulationEngine:
             writer,
             self._retry_policy or RetryPolicy(),
         )
+        self._metrics = MetricsCollector()
         self._metadata.create_run(
             run_id,
             datetime.now(UTC),
@@ -129,6 +133,7 @@ class SimulationEngine:
             persisted_records=sum(chunk.record_count for chunk in persisted),
             stopped=self._stop_requested.is_set(),
             chunk_ids=tuple(chunk.chunk_id for chunk in persisted),
+            metrics=self._metrics.snapshot(),
         )
 
     def stop(self) -> None:
@@ -145,10 +150,13 @@ class SimulationEngine:
         persisted: list[Chunk],
         failed: list[Chunk],
     ) -> None:
+        self._metrics.record_input()
         while not self._stop_requested.is_set():
             offered = self._queue.offer(source_record)
             if offered.accepted:
                 self._process_one(persisted, failed)
+                self._metrics.observe_queue(self._queue.metrics())
+                self._metrics.observe_buffer(self._buffer.metrics())
                 return
             self._process_one(persisted, failed)
 
@@ -166,6 +174,7 @@ class SimulationEngine:
             payload,
         )
         if not result.accepted or result.record is None:
+            self._metrics.record_rejected()
             return
         self._metadata.record_metric_sample(
             self._run_id,
@@ -197,6 +206,16 @@ class SimulationEngine:
             lifecycle = self._lifecycle.persist(chunk)
             if lifecycle.state is ChunkState.PERSISTED:
                 persisted.append(chunk)
+                self._metrics.record_persisted(chunk.record_count)
+                if lifecycle.persisted_chunk is None:
+                    raise RuntimeError("persisted lifecycle is missing writer metadata")
+                self._metrics.record_chunk(
+                    chunk.record_count,
+                    lifecycle.persisted_chunk.byte_size,
+                )
+                self._metrics.record_retries(
+                    sum(event.state is ChunkState.FAILED for event in lifecycle.events)
+                )
                 self._metadata.record_chunk(
                     self._run_id,
                     chunk,
