@@ -65,6 +65,8 @@ class BufferSettings(SimulationModel):
     """Bounds and grouping settings for in-memory buffering."""
 
     max_records: int = Field(default=5_000, ge=1, le=1_000_000)
+    max_partitions: int = Field(default=100, ge=1, le=10_000)
+    idle_partition_seconds: int = Field(default=300, ge=1, le=86_400)
     partition_by: tuple[PartitionKey, ...] = (
         PartitionKey.DEVICE_ID,
         PartitionKey.METRIC,
