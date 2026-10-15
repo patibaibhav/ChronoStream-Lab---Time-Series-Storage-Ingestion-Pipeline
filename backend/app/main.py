@@ -39,10 +39,21 @@ class LabController:
         self._engine: SimulationEngine | None = None
         self._thread: Thread | None = None
         self._summary: RunSummary | None = None
+        self._active_run_id: str | None = None
+        self._stopping = False
+        self._starting = False
 
     @property
     def running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def stopping(self) -> bool:
+        return self._stopping
+
+    @property
+    def starting(self) -> bool:
+        return self._starting
 
     def start(self, request: RunStartRequest) -> None:
         with self._lock:
@@ -54,12 +65,17 @@ class LabController:
                 metadata_repository=self.metadata,
             )
             self._summary = None
+            self._active_run_id = request.run_id
+            self._stopping = False
+            self._starting = True
             self._thread = Thread(
                 target=self._run,
                 args=(request.run_id, request.record_count),
                 daemon=True,
             )
             self._thread.start()
+            # Clear starting flag immediately — the thread is now running
+            self._starting = False
 
     @property
     def metrics(self) -> object:
@@ -69,13 +85,22 @@ class LabController:
         with self._lock:
             if self._engine is None or not self.running:
                 raise HTTPException(status_code=409, detail="no simulation is running")
+            if self._stopping:
+                return  # idempotent: already stopping
+            self._stopping = True
             self._engine.stop()
 
     def _run(self, run_id: str, record_count: int) -> None:
         if self._engine is None:
             return
-        self._summary = self._engine.run(run_id, record_count)
-        snapshots.publish({"type": "run_completed", "run_id": run_id, "summary": self._summary})
+        try:
+            self._summary = self._engine.run(run_id, record_count)
+            self._active_run_id = run_id
+            snapshots.publish({"type": "run_completed", "run_id": run_id, "summary": self._summary})
+        finally:
+            with self._lock:
+                self._stopping = False
+                self._starting = False
 
 
 controller = LabController(Path(os.getenv("DATA_DIR", "data")))
@@ -106,10 +131,29 @@ def stop_run() -> dict[str, str]:
 
 @app.get("/api/runs/status")
 def run_status() -> dict[str, object]:
+    if controller.stopping:
+        return {
+            "status": "stopping",
+            "run_id": controller._active_run_id,
+            "metrics": controller.metrics,
+        }
+    if controller.starting:
+        return {
+            "status": "starting",
+            "run_id": controller._active_run_id,
+        }
     if controller.running:
-        return {"status": "running", "metrics": controller.metrics}
+        return {
+            "status": "running",
+            "run_id": controller._active_run_id,
+            "metrics": controller.metrics,
+        }
     if controller._summary is not None:
-        return {"status": "completed", "summary": controller._summary}
+        return {
+            "status": "completed",
+            "run_id": controller._summary.run_id,
+            "summary": controller._summary,
+        }
     return {"status": "idle"}
 
 
@@ -121,6 +165,16 @@ def run_history() -> list[dict[str, object]]:
 @app.get("/api/chunks")
 def chunks(run_id: str | None = None) -> list[dict[str, object]]:
     return controller.metadata.list_chunks(run_id)
+
+
+@app.get("/api/runs/{run_id}/files")
+def run_files(run_id: str) -> list[dict[str, object]]:
+    return controller.metadata.list_files(run_id)
+
+
+@app.get("/api/metrics/aggregate")
+def aggregate_metrics() -> dict[str, object]:
+    return controller.metadata.aggregate_metrics()
 
 
 @app.get("/api/events")
@@ -147,8 +201,8 @@ def compare_runs(run_id: str, baseline_run_id: str) -> dict[str, object]:
     baseline = controller.metadata.run_summary(baseline_run_id)
     metrics = {
         key: {
-            "current": current[key],
-            "baseline": baseline[key],
+            "run_a": current[key],
+            "run_b": baseline[key],
             "delta": current[key] - baseline[key],
         }
         for key in (
@@ -157,9 +211,17 @@ def compare_runs(run_id: str, baseline_run_id: str) -> dict[str, object]:
             "rejected_records",
             "persisted_chunks",
             "persisted_records",
+            "persisted_bytes",
+            "failed_chunks",
         )
     }
-    return {"run_id": run_id, "baseline_run_id": baseline_run_id, "metrics": metrics}
+    return {
+        "run_id": run_id,
+        "baseline_run_id": baseline_run_id,
+        "run_a_label": runs[run_id].get("started_at", run_id),
+        "run_b_label": runs[baseline_run_id].get("started_at", baseline_run_id),
+        "metrics": metrics,
+    }
 
 
 @app.get("/api/runs/export")
@@ -178,6 +240,7 @@ def export_runs() -> StreamingResponse:
             "persisted_chunks",
             "persisted_records",
         ],
+        extrasaction="ignore",
     )
     writer.writeheader()
     for run in controller.metadata.list_runs():
@@ -211,13 +274,69 @@ def presets() -> dict[str, SimulationSettings]:
     return {"default": SimulationSettings()}
 
 
+_active_ws_lock = Lock()
+_active_ws_connections: set[WebSocket] = set()
+
+
+def _build_snapshot(run_id: str | None, status: str, metrics: object, sequence: int) -> dict[str, object]:
+    """Build a structured snapshot with run_id and sequence for stale-state prevention."""
+    snapshot: dict[str, object] = {
+        "type": "metrics",
+        "run_id": run_id,
+        "status": status,
+        "sequence": sequence,
+        "metrics": metrics,
+    }
+    return snapshot
+
+
 @app.websocket("/api/ws")
 async def websocket_snapshots(websocket: WebSocket) -> None:
     await websocket.accept()
+    with _active_ws_lock:
+        _active_ws_connections.add(websocket)
+    sequence = 0
     try:
         while True:
-            await websocket.send_json({"events": snapshots.snapshot()})
+            sequence += 1
+            if controller.running:
+                snapshot = _build_snapshot(
+                    controller._active_run_id,
+                    "running",
+                    controller.metrics,
+                    sequence,
+                )
+            elif controller._summary is not None:
+                snapshot = _build_snapshot(
+                    controller._summary.run_id,
+                    "completed",
+                    controller._summary.metrics,
+                    sequence,
+                )
+            else:
+                snapshot = _build_snapshot(None, "idle", None, sequence)
+            await websocket.send_json(snapshot)
             await sleep(1)
     except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        with _active_ws_lock:
+            _active_ws_connections.discard(websocket)
         with suppress(Exception):
             await websocket.close()
+
+
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+    with _active_ws_lock:
+        for ws in list(_active_ws_connections):
+            with suppress(Exception):
+                await ws.close()
+        _active_ws_connections.clear()
+
+
+app.router.lifespan_context = lifespan

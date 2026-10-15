@@ -25,7 +25,7 @@ def test_start_status_and_history_endpoints() -> None:
     assert response.status_code == 202
     status = client.get("/api/runs/status")
     assert status.status_code == 200
-    assert status.json()["status"] in {"running", "completed"}
+    assert status.json()["status"] in {"starting", "running", "completed"}
     assert any(run["run_id"] == run_id for run in client.get("/api/runs/history").json())
 
 

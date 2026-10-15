@@ -71,11 +71,15 @@ class ChunkLifecycleManager:
         *,
         clock: Callable[[], datetime] | None = None,
         sleeper: Callable[[float], None] = sleep,
+        writer_delay_seconds: float = 0.0,
     ) -> None:
+        if writer_delay_seconds < 0:
+            raise ValueError("writer_delay_seconds must be non-negative")
         self._writer = writer
         self._retry_policy = retry_policy
         self._clock = clock or (lambda: datetime.now(UTC))
         self._sleeper = sleeper
+        self._writer_delay_seconds = writer_delay_seconds
         self._lifecycles: dict[str, ChunkLifecycle] = {}
 
     def persist(self, chunk: Chunk) -> ChunkLifecycle:
@@ -95,6 +99,8 @@ class ChunkLifecycleManager:
                 chunk.chunk_id, ChunkState.WRITING, lifecycle.attempts + 1
             )
             try:
+                if self._writer_delay_seconds:
+                    self._sleeper(self._writer_delay_seconds)
                 persisted_chunk = self._writer.write(chunk)
             except Exception as error:
                 lifecycle = self._transition(

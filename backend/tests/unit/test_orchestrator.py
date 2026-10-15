@@ -18,16 +18,17 @@ def test_engine_runs_all_pipeline_stages_and_persists_chunks(tmp_path: Path) -> 
     assert summary.generated_records == 5
     assert summary.accepted_records == 5
     assert summary.rejected_records == 0
-    assert summary.persisted_chunks == 4
+    # Global sealing: 2 full chunks (size=2) + 1 partial chunk (end_of_run, size=1)
+    assert summary.persisted_chunks == 3
     assert summary.failed_chunks == 0
     assert summary.persisted_records == 5
     assert summary.stopped is False
-    assert len(summary.chunk_ids) == 4
-    assert len(list(tmp_path.glob("parquet/run_run-1/*.parquet"))) == 4
+    assert len(summary.chunk_ids) == 3
+    assert len(list(tmp_path.glob("parquet/run_run-1/*.parquet"))) == 3
     metadata = SQLiteMetadataRepository(tmp_path / "lab.sqlite")
     assert metadata.count("events", "run-1") == 5
     assert metadata.count("metric_samples", "run-1") == 5
-    assert metadata.count("chunks", "run-1") == 4
+    assert metadata.count("chunks", "run-1") == 3
 
 
 def test_engine_can_be_stopped_cleanly(tmp_path: Path) -> None:

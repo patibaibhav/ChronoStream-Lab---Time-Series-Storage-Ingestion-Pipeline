@@ -96,7 +96,8 @@ class SeededRecordGenerator:
             )
             if (
                 self._settings.invalid_record_ratio > 0
-                and random.random() < self._settings.invalid_record_ratio
+                and int((sequence_number + 1) * self._settings.invalid_record_ratio)
+                > int(sequence_number * self._settings.invalid_record_ratio)
             ):
                 yield {
                     "event_id": event_id,
