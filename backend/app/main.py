@@ -177,6 +177,26 @@ def aggregate_metrics() -> dict[str, object]:
     return controller.metadata.aggregate_metrics()
 
 
+@app.get("/api/metrics/samples")
+def metric_samples(run_id: str | None = None) -> list[dict[str, object]]:
+    """Return time-series samples of key metrics for charting."""
+    if run_id is None:
+        run_id = controller._active_run_id
+    if run_id is None:
+        return []
+    samples: list[dict[str, object]] = []
+    for event in controller.metadata.list_events(run_id):
+        payload = event.get("payload") or {}
+        samples.append({
+            "timestamp": event.get("event_id", "")[:8] if event.get("event_id") else "",
+            "run_id": run_id,
+            "status": event.get("status"),
+            "metric": payload.get("metric", ""),
+            "value": payload.get("value", 0),
+        })
+    return samples[-200:]  # bound response size
+
+
 @app.get("/api/events")
 def events(run_id: str | None = None) -> list[dict[str, object]]:
     return controller.metadata.list_events(run_id)

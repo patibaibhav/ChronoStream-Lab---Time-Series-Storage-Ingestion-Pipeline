@@ -4,12 +4,23 @@ import {
   Background,
   Controls,
   useReactFlow,
+  MarkerType,
   type Node,
   type Edge,
   type NodeProps,
-  Handle,
-  Position,
 } from '@xyflow/react'
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  Legend,
+} from 'recharts'
 import '@xyflow/react/dist/style.css'
 
 const API_URL = import.meta.env.VITE_API_URL ?? ''
@@ -91,7 +102,7 @@ type Event = {
   event_id?: string
   status: string
   reason?: string
-  payload?: { metric?: string; value?: number } | null
+  payload?: { metric?: string; value?: number; timestamp?: string } | null
 }
 
 type Run = {
@@ -121,6 +132,76 @@ type Aggregate = {
   total_files: number
   total_bytes: number
 }
+
+type MetricSample = {
+  timestamp: string
+  run_id: string
+  status: string
+  metric: string
+  value: number
+}
+
+type Preset = {
+  id: string
+  name: string
+  description: string
+  config: {
+    recordCount: number
+    feedRate: number
+    chunkSize: number
+    writerDelay: number
+    invalidRatio: number
+    bufferMaxRecords?: number
+    validationDelayMs?: number
+  }
+}
+
+// --- Presets ---
+
+const PRESETS: Preset[] = [
+  {
+    id: 'baseline',
+    name: 'Baseline Ingestion',
+    description: 'Normal workload with successful persistence',
+    config: { recordCount: 1000, feedRate: 500, chunkSize: 100, writerDelay: 0, invalidRatio: 0 },
+  },
+  {
+    id: 'high-throughput',
+    name: 'High Throughput',
+    description: 'Increased load to examine processing capacity',
+    config: { recordCount: 5000, feedRate: 5000, chunkSize: 100, writerDelay: 0, invalidRatio: 0 },
+  },
+  {
+    id: 'slow-storage',
+    name: 'Slow Storage',
+    description: 'Increased writer delay to observe backlog',
+    config: { recordCount: 1000, feedRate: 1000, chunkSize: 100, writerDelay: 200, invalidRatio: 0 },
+  },
+  {
+    id: 'queue-saturation',
+    name: 'Queue Saturation',
+    description: 'Constrained queue with high offered load',
+    config: { recordCount: 2000, feedRate: 10000, chunkSize: 100, writerDelay: 0, invalidRatio: 0, bufferMaxRecords: 100, validationDelayMs: 5 },
+  },
+  {
+    id: 'invalid-records',
+    name: 'Invalid Records',
+    description: 'High invalid ratio to observe rejection behavior',
+    config: { recordCount: 1000, feedRate: 1000, chunkSize: 100, writerDelay: 0, invalidRatio: 0.25 },
+  },
+  {
+    id: 'chunk-comparison',
+    name: 'Chunk Size Comparison',
+    description: 'Smaller chunks for more frequent flushes',
+    config: { recordCount: 1000, feedRate: 1000, chunkSize: 25, writerDelay: 0, invalidRatio: 0 },
+  },
+  {
+    id: 'recovery-test',
+    name: 'Recovery Test',
+    description: 'Stop and restart to verify recovery',
+    config: { recordCount: 5000, feedRate: 2000, chunkSize: 50, writerDelay: 50, invalidRatio: 0.1 },
+  },
+]
 
 // --- Custom node components ---
 
@@ -241,6 +322,48 @@ const nodeTypes = {
   storage: StorageNode,
 }
 
+// --- Helpers ---
+
+function FitViewButton() {
+  const { fitView } = useReactFlow()
+  return (
+    <button
+      type="button"
+      onClick={() => fitView({ padding: 0.2, maxZoom: 1 })}
+      style={{
+        position: 'absolute',
+        top: '0.75rem',
+        right: '0.75rem',
+        zIndex: 10,
+        background: '#1a2530',
+        border: '1px solid #3d5a75',
+        borderRadius: '6px',
+        color: '#e7edf5',
+        padding: '0.35rem 0.7rem',
+        fontSize: '0.72rem',
+        cursor: 'pointer',
+      }}
+    >
+      Fit view
+    </button>
+  )
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+async function request(path: string, init?: RequestInit) {
+  const response = await fetch(`${API_URL}${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...init,
+  })
+  if (!response.ok) throw new Error((await response.json()).detail ?? `Request failed (${response.status})`)
+  return response.json()
+}
+
 // --- Comparison table ---
 
 function ComparisonTable({ runs }: { runs: Run[] }) {
@@ -305,46 +428,42 @@ function ComparisonTable({ runs }: { runs: Run[] }) {
   )
 }
 
-// --- Helpers ---
+// --- Charts ---
 
-function FitViewButton() {
-  const { fitView } = useReactFlow()
+function ThroughputChart({ samples }: { samples: MetricSample[] }) {
+  if (samples.length === 0) {
+    return <div className="empty">No data yet. Start a run to see throughput.</div>
+  }
   return (
-    <button
-      type="button"
-      onClick={() => fitView({ padding: 0.2, maxZoom: 1 })}
-      style={{
-        position: 'absolute',
-        top: '0.75rem',
-        right: '0.75rem',
-        zIndex: 10,
-        background: '#1a2530',
-        border: '1px solid #3d5a75',
-        borderRadius: '6px',
-        color: '#e7edf5',
-        padding: '0.35rem 0.7rem',
-        fontSize: '0.72rem',
-        cursor: 'pointer',
-      }}
-    >
-      Fit view
-    </button>
+    <ResponsiveContainer width="100%" height={200}>
+      <LineChart data={samples}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1f2327" />
+        <XAxis dataKey="timestamp" tick={{ fontSize: 10, fill: '#6b7280' }} />
+        <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} />
+        <Tooltip contentStyle={{ background: '#16181c', border: '1px solid #26292e', borderRadius: 6, fontSize: 12 }} />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+        <Line type="monotone" dataKey="value" stroke="#6ee7b7" dot={false} name="Throughput" />
+      </LineChart>
+    </ResponsiveContainer>
   )
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-async function request(path: string, init?: RequestInit) {
-  const response = await fetch(`${API_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  })
-  if (!response.ok) throw new Error((await response.json()).detail ?? `Request failed (${response.status})`)
-  return response.json()
+function QueueDepthChart({ samples }: { samples: MetricSample[] }) {
+  if (samples.length === 0) {
+    return <div className="empty">No data yet. Start a run to see queue and buffer metrics.</div>
+  }
+  return (
+    <ResponsiveContainer width="100%" height={160}>
+      <LineChart data={samples}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1f2327" />
+        <XAxis dataKey="timestamp" tick={{ fontSize: 10, fill: '#6b7280' }} />
+        <YAxis tick={{ fontSize: 10, fill: '#6b7280' }} />
+        <Tooltip contentStyle={{ background: '#16181c', border: '1px solid #26292e', borderRadius: 6, fontSize: 12 }} />
+        <Legend wrapperStyle={{ fontSize: 11 }} />
+        <Line type="monotone" dataKey="value" stroke="#6ee7b7" dot={false} name="Queue Depth" />
+      </LineChart>
+    </ResponsiveContainer>
+  )
 }
 
 // --- Main App ---
@@ -364,7 +483,12 @@ export function App() {
   const [connected, setConnected] = useState(false)
   const [currentRunId, setCurrentRunId] = useState<string | null>(null)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
+  const [activePreset, setActivePreset] = useState<string | null>(null)
+  const [metricSamples, setMetricSamples] = useState<MetricSample[]>([])
+  const [bufferMaxRecords, setBufferMaxRecords] = useState<number | undefined>(undefined)
+  const [validationDelayMs, setValidationDelayMs] = useState<number | undefined>(undefined)
 
+  const sampleCounterRef = useRef(0)
   const refresh = useCallback(async () => {
     try {
       const nextStatus = await request('/api/runs/status') as Status
@@ -383,25 +507,37 @@ export function App() {
       setAggregate(nextAggregate)
       setConnected(true)
       setError('')
+      // Sample metrics for charts during polling too
+      if (nextStatus.metrics && (nextStatus.status === 'running' || nextStatus.status === 'stopping')) {
+        sampleCounterRef.current += 1
+        setMetricSamples(prev => {
+          const newSample: MetricSample = {
+            timestamp: `${sampleCounterRef.current}`,
+            run_id: nextStatus.run_id ?? '',
+            status: nextStatus.status,
+            metric: 'throughput',
+            value: nextStatus.metrics?.input_rate_records_per_second ?? 0,
+          }
+          return [...prev.slice(-99), newSample]
+        })
+      }
     } catch (cause) {
       setConnected(false)
       setError(cause instanceof Error ? cause.message : 'Unable to reach the backend')
     }
   }, [currentRunId])
 
-  // Track latest currentRunId in a ref to avoid WebSocket reconnection on run change
+  // WebSocket + polling
   const currentRunIdRef = useRef<string | null>(null)
-  useEffect(() => {
-    currentRunIdRef.current = currentRunId
-  }, [currentRunId])
+  useEffect(() => { currentRunIdRef.current = currentRunId }, [currentRunId])
 
   useEffect(() => {
     void refresh()
-    // Use WebSocket for live updates with polling fallback
     let ws: WebSocket | null = null
     let reconnectTimer: number | null = null
     let disposed = false
     let lastSequence = 0
+    let sampleCounter = 0
 
     const connect = () => {
       if (disposed) return
@@ -417,18 +553,12 @@ export function App() {
             sequence: number
             metrics?: Metrics
           }
-          // Ignore stale snapshots with older sequence numbers
           if (snapshot.sequence <= lastSequence) return
           lastSequence = snapshot.sequence
-
-          // Ignore snapshots from a different run
           const activeRunId = currentRunIdRef.current
-          if (snapshot.run_id && activeRunId && snapshot.run_id !== activeRunId) {
-            return
-          }
+          if (snapshot.run_id && activeRunId && snapshot.run_id !== activeRunId) return
           if (snapshot.status === 'running' || snapshot.status === 'stopping' || snapshot.status === 'starting') {
             setStatus(prev => {
-              // Don't overwrite a newer state with an older one
               if (snapshot.status === 'stopping' && prev.status === 'completed') return prev
               return {
                 status: snapshot.status as Status['status'],
@@ -436,29 +566,31 @@ export function App() {
                 metrics: snapshot.metrics,
               }
             })
+            // Sample metrics every 10th message for charts
+            if (snapshot.metrics && snapshot.sequence % 10 === 0) {
+              sampleCounter++
+              setMetricSamples(prev => {
+                const newSample: MetricSample = {
+                  timestamp: `${sampleCounter}`,
+                  run_id: snapshot.run_id ?? '',
+                  status: snapshot.status,
+                  metric: 'throughput',
+                  value: snapshot.metrics?.input_rate_records_per_second ?? 0,
+                }
+                return [...prev.slice(-99), newSample]
+              })
+            }
           } else if (snapshot.status === 'completed' || snapshot.status === 'idle') {
             void refresh()
           }
-        } catch {
-          // ignore malformed messages
-        }
+        } catch { /* ignore */ }
       }
-
-      ws.onclose = () => {
-        if (disposed) return
-        reconnectTimer = window.setTimeout(connect, 2000)
-      }
-
-      ws.onerror = () => {
-        ws?.close()
-      }
+      ws.onclose = () => { if (!disposed) reconnectTimer = window.setTimeout(connect, 2000) }
+      ws.onerror = () => { ws?.close() }
     }
 
     connect()
-
-    // Polling fallback every 2 seconds
     const timer = window.setInterval(() => void refresh(), 2000)
-
     return () => {
       disposed = true
       if (reconnectTimer) window.clearTimeout(reconnectTimer)
@@ -467,13 +599,27 @@ export function App() {
     }
   }, [refresh])
 
+  const applyPreset = (preset: Preset) => {
+    setRecordCount(preset.config.recordCount)
+    setFeedRate(preset.config.feedRate)
+    setChunkSize(preset.config.chunkSize)
+    setWriterDelay(preset.config.writerDelay)
+    setInvalidRatio(preset.config.invalidRatio)
+    setActivePreset(preset.id)
+    // Store buffer and validation delay for use in start
+    if (preset.config.bufferMaxRecords) {
+      setBufferMaxRecords(preset.config.bufferMaxRecords)
+    }
+    if (preset.config.validationDelayMs) {
+      setValidationDelayMs(preset.config.validationDelayMs)
+    }
+  }
+
   const start = async (event: React.FormEvent) => {
     event.preventDefault()
     const runId = `run-${Date.now()}`
-    // Don't set currentRunId yet — wait for backend confirmation
-    setChunks([])
-    setEvents([])
-    setSelectedNode(null)
+    setChunks([]); setEvents([]); setSelectedNode(null)
+    setMetricSamples([])
     try {
       const response = await request('/api/runs/start', {
         method: 'POST',
@@ -482,25 +628,23 @@ export function App() {
           record_count: recordCount,
           settings: {
             chunking: { max_records: chunkSize },
-            processing: { writer_delay_ms: writerDelay },
+            processing: { writer_delay_ms: writerDelay, ...(validationDelayMs !== undefined && { validation_delay_ms: validationDelayMs }) },
             feed: { records_per_second: feedRate, invalid_record_ratio: invalidRatio },
+            ...(bufferMaxRecords !== undefined && { buffer: { max_records: bufferMaxRecords } }),
           },
         }),
       }) as { run_id: string; status: string }
-      // Only set currentRunId after backend confirms
-      if (response.run_id) {
-        setCurrentRunId(response.run_id)
-      }
+      if (response.run_id) setCurrentRunId(response.run_id)
+      setActivePreset(null)
       await refresh()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to start run')
-      // Don't leave stale state on failure
       setCurrentRunId(null)
     }
   }
 
   const stop = async () => {
-    if (status.status === 'stopping') return  // prevent duplicate clicks
+    if (status.status === 'stopping') return
     try {
       await request('/api/runs/stop', { method: 'POST' })
       await refresh()
@@ -513,80 +657,42 @@ export function App() {
   const isStarting = status.status === 'starting'
   const isRunning = status.status === 'running'
   const isStopping = status.status === 'stopping'
-  const isStopped = status.status === 'stopped'
   const isTerminal = status.status === 'idle' || status.status === 'completed' || status.status === 'stopped'
   const isActive = isStarting || isRunning || isStopping
-
-  // Use metrics directly for canvas rendering — dependency arrays now correct
   const canvasMetrics = metrics
 
-  // Build React Flow nodes — stable IDs, only data changes
-  const nodes: Node[] = useMemo(() => {
+  const [nodes, setNodes] = useState<Node[]>([])
+  useEffect(() => {
     const m = canvasMetrics
-    return [
-      {
-        id: 'generator',
-        type: 'generator',
-        position: { x: 0, y: 140 },
-        data: { metrics: m, target: recordCount },
-      },
-      {
-        id: 'queue',
-        type: 'queue',
-        position: { x: 220, y: 140 },
-        data: { metrics: m },
-      },
-      {
-        id: 'processor',
-        type: 'processor',
-        position: { x: 440, y: 140 },
-        data: { metrics: m },
-      },
-      {
-        id: 'buffers',
-        type: 'buffers',
-        position: { x: 660, y: 140 },
-        data: { metrics: m },
-      },
-      {
-        id: 'chunkBuilder',
-        type: 'chunkBuilder',
-        position: { x: 880, y: 140 },
-        data: { metrics: m },
-      },
-      {
-        id: 'writer',
-        type: 'writer',
-        position: { x: 1100, y: 140 },
-        data: { metrics: m },
-      },
-      {
-        id: 'storage',
-        type: 'storage',
-        position: { x: 1320, y: 140 },
-        data: { metrics: m },
-      },
-    ]
+    setNodes([
+      { id: 'generator', type: 'generator', position: { x: 0, y: 140 }, data: { metrics: m, target: recordCount } },
+      { id: 'queue', type: 'queue', position: { x: 220, y: 140 }, data: { metrics: m } },
+      { id: 'processor', type: 'processor', position: { x: 440, y: 140 }, data: { metrics: m } },
+      { id: 'buffers', type: 'buffers', position: { x: 660, y: 140 }, data: { metrics: m } },
+      { id: 'chunkBuilder', type: 'chunkBuilder', position: { x: 880, y: 140 }, data: { metrics: m } },
+      { id: 'writer', type: 'writer', position: { x: 1100, y: 140 }, data: { metrics: m } },
+      { id: 'storage', type: 'storage', position: { x: 1320, y: 140 }, data: { metrics: m } },
+    ])
   }, [canvasMetrics, recordCount])
 
-  // Build edges with rate labels — stable IDs
   const edges: Edge[] = useMemo(() => {
     const m = canvasMetrics
     const genRate = (m?.input_rate_records_per_second ?? 0).toFixed(1)
     const procRate = ((m?.input_records ?? 0) - (m?.rejected_records ?? 0)).toString()
     const writeRate = (m?.persisted_rate_records_per_second ?? 0).toFixed(1)
+    const arrow = { type: MarkerType.ArrowClosed, color: '#6ee7b7', width: 20, height: 20 }
     return [
-      { id: 'e1', source: 'generator', target: 'queue', label: `${genRate} rec/s`, animated: isRunning },
-      { id: 'e2', source: 'queue', target: 'processor', label: `${procRate} accepted`, animated: isRunning },
-      { id: 'e3', source: 'processor', target: 'buffers', label: `${procRate} rec/s`, animated: isRunning },
-      { id: 'e4', source: 'buffers', target: 'chunkBuilder', label: `${m?.chunks_created ?? 0} chunks`, animated: isRunning },
-      { id: 'e5', source: 'chunkBuilder', target: 'writer', label: `${m?.chunks_awaiting_write ?? 0} waiting`, animated: isRunning },
-      { id: 'e6', source: 'writer', target: 'storage', label: `${writeRate} rec/s`, animated: isRunning },
+      { id: 'e1', source: 'generator', target: 'queue', label: `${genRate} rec/s`, animated: isRunning, markerEnd: arrow },
+      { id: 'e2', source: 'queue', target: 'processor', label: `${procRate} accepted`, animated: isRunning, markerEnd: arrow },
+      { id: 'e3', source: 'processor', target: 'buffers', label: `${procRate} rec/s`, animated: isRunning, markerEnd: arrow },
+      { id: 'e4', source: 'buffers', target: 'chunkBuilder', label: `${m?.chunks_created ?? 0} chunks`, animated: isRunning, markerEnd: arrow },
+      { id: 'e5', source: 'chunkBuilder', target: 'writer', label: `${m?.chunks_awaiting_write ?? 0} waiting`, animated: isRunning, markerEnd: arrow },
+      { id: 'e6', source: 'writer', target: 'storage', label: `${writeRate} rec/s`, animated: isRunning, markerEnd: arrow },
     ]
   }, [canvasMetrics, isRunning])
 
-  const visibleEvents = events.slice(0, 12)
-  const visibleChunks = chunks.slice(0, 8)
+  const visibleEvents = events.slice(0, 20)
+  const visibleChunks = chunks.slice(0, 10)
 
   return (
     <div>
@@ -605,23 +711,41 @@ export function App() {
 
       {error && <div className="alert" role="alert">{error}</div>}
 
+      {/* Presets */}
+      <section className="preset-bar">
+        <div className="section-title"><h2>Experiment Presets</h2></div>
+        <div className="preset-grid">
+          {PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              className={`preset-btn ${activePreset === preset.id ? 'active' : ''}`}
+              onClick={() => applyPreset(preset)}
+              title={preset.description}
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
+      </section>
+
       {/* Config toolbar */}
       <section className="config-bar">
         <form onSubmit={start} style={{ display: 'contents' }}>
           <label>Records
-            <input type="number" min="0" max="100000" value={recordCount} onChange={(e) => setRecordCount(Number(e.target.value))} />
+            <input type="number" min="0" max="100000" value={recordCount} onChange={(e) => { setRecordCount(Number(e.target.value)); setActivePreset(null) }} />
           </label>
           <label>Feed rate /s
-            <input type="number" min="1" max="100000" value={feedRate} onChange={(e) => setFeedRate(Number(e.target.value))} />
+            <input type="number" min="1" max="100000" value={feedRate} onChange={(e) => { setFeedRate(Number(e.target.value)); setActivePreset(null) }} />
           </label>
           <label>Chunk size
-            <input type="number" min="1" max="1000000" value={chunkSize} onChange={(e) => setChunkSize(Number(e.target.value))} />
+            <input type="number" min="1" max="1000000" value={chunkSize} onChange={(e) => { setChunkSize(Number(e.target.value)); setActivePreset(null) }} />
           </label>
           <label>Writer delay ms
-            <input type="number" min="0" max="60000" value={writerDelay} onChange={(e) => setWriterDelay(Number(e.target.value))} />
+            <input type="number" min="0" max="60000" value={writerDelay} onChange={(e) => { setWriterDelay(Number(e.target.value)); setActivePreset(null) }} />
           </label>
           <label>Invalid ratio
-            <input type="number" min="0" max="1" step="0.05" value={invalidRatio} onChange={(e) => setInvalidRatio(Number(e.target.value))} />
+            <input type="number" min="0" max="1" step="0.05" value={invalidRatio} onChange={(e) => { setInvalidRatio(Number(e.target.value)); setActivePreset(null) }} />
           </label>
           <button type="submit" disabled={isActive}>Start</button>
           <button type="button" className="secondary" onClick={stop} disabled={!isRunning || isStopping}>
@@ -630,19 +754,28 @@ export function App() {
         </form>
       </section>
 
+      {/* KPI cards */}
+      <section className="kpi-row">
+        {[
+          { label: 'Generated', value: metrics?.input_records ?? 0 },
+          { label: 'Accepted', value: (metrics?.input_records ?? 0) - (metrics?.rejected_records ?? 0) },
+          { label: 'Rejected', value: metrics?.rejected_records ?? 0, warn: true },
+          { label: 'Persisted', value: metrics?.persisted_records ?? 0 },
+          { label: 'Chunks', value: metrics?.chunks_created ?? 0 },
+          { label: 'Files', value: metrics?.file_count ?? 0 },
+          { label: 'Bytes', value: formatBytes(metrics?.bytes_written ?? 0) },
+          { label: 'Queue', value: `${metrics?.queue_depth ?? 0}/${metrics?.queue_capacity ?? 0}` },
+        ].map((kpi) => (
+          <div key={kpi.label} className="kpi-card">
+            <span className="kpi-label">{kpi.label}</span>
+            <span className="kpi-value">{kpi.value}</span>
+          </div>
+        ))}
+      </section>
+
       {/* Pipeline canvas */}
       <div className="canvas-wrap" style={{ position: 'relative' }}>
-        <div style={{
-          position: 'absolute',
-          top: '0.5rem',
-          left: '0.75rem',
-          zIndex: 10,
-          fontSize: '0.68rem',
-          color: '#4b5563',
-          fontWeight: 600,
-          letterSpacing: '0.05em',
-          textTransform: 'uppercase',
-        }}>
+        <div style={{ position: 'absolute', top: '0.5rem', left: '0.75rem', zIndex: 10, fontSize: '0.68rem', color: '#4b5563', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
           Live Metrics {currentRunId ? `— ${currentRunId.slice(0, 10)}` : ''}
         </div>
         <ReactFlow
@@ -652,6 +785,9 @@ export function App() {
           onNodeClick={(_, node) => setSelectedNode(node.id)}
           minZoom={0.3}
           maxZoom={2}
+          zoomOnScroll={false}
+          panOnScroll={false}
+          panOnDrag={true}
           proOptions={{ hideAttribution: true }}
         >
           <Background color="#1a2530" gap={20} />
@@ -660,9 +796,20 @@ export function App() {
         </ReactFlow>
       </div>
 
+      {/* Charts */}
+      <div className="charts-row">
+        <div className="panel">
+          <h3>Throughput</h3>
+          <ThroughputChart samples={metricSamples} />
+        </div>
+        <div className="panel">
+          <h3>Queue & Buffer</h3>
+          <QueueDepthChart samples={metricSamples} />
+        </div>
+      </div>
+
       {/* Bottom panels */}
       <div className="panels">
-        {/* Event log */}
         <div className="panel">
           <h3>Event Log</h3>
           {visibleEvents.length === 0 ? (
@@ -678,8 +825,6 @@ export function App() {
             </ul>
           )}
         </div>
-
-        {/* Storage explorer */}
         <div className="panel">
           <h3>Storage Explorer</h3>
           {visibleChunks.length === 0 ? (
@@ -696,8 +841,6 @@ export function App() {
             </ul>
           )}
         </div>
-
-        {/* Aggregate metrics */}
         <div className="panel">
           <h3>All Runs (aggregate)</h3>
           {aggregate ? (
@@ -726,15 +869,8 @@ export function App() {
             <table>
               <thead>
                 <tr>
-                  <th>Run ID</th>
-                  <th>Started</th>
-                  <th>Duration</th>
-                  <th>Status</th>
-                  <th>Gen</th>
-                  <th>Acc</th>
-                  <th>Rej</th>
-                  <th>Chunks</th>
-                  <th>Bytes</th>
+                  <th>Run ID</th><th>Started</th><th>Duration</th><th>Status</th>
+                  <th>Gen</th><th>Acc</th><th>Rej</th><th>Chunks</th><th>Bytes</th>
                 </tr>
               </thead>
               <tbody>
@@ -766,7 +902,7 @@ export function App() {
         </div>
       </div>
 
-      {/* Storage explorer */}
+      {/* Storage explorer full */}
       <div className="run-history">
         <div className="panel">
           <h3>Storage Explorer {currentRunId ? `— ${currentRunId.slice(0, 16)}` : ''}</h3>

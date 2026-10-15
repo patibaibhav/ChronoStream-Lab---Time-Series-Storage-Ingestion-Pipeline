@@ -121,6 +121,40 @@ body {
   background: #0d0f12;
   border-bottom: 1px solid #1f2327;
   position: relative;
+  overflow: visible;
+}
+
+/* Let page scroll when over canvas */
+.canvas-wrap .react-flow {
+  pointer-events: none;
+}
+
+.canvas-wrap .react-flow__node {
+  pointer-events: auto;
+}
+
+.canvas-wrap .react-flow__controls {
+  pointer-events: auto;
+}
+
+/* Make edges and arrows more visible */
+.react-flow__edge-path {
+  stroke: #6ee7b7 !important;
+  stroke-width: 2 !important;
+}
+
+.react-flow__edge-text {
+  fill: #9ca3af !important;
+  font-size: 10px !important;
+}
+
+.react-flow__arrowhead polyline {
+  fill: #6ee7b7 !important;
+  stroke: #6ee7b7 !important;
+}
+
+.react-flow__marker {
+  fill: #6ee7b7 !important;
 }
 
 /* Custom nodes */
@@ -395,4 +429,106 @@ body {
 
 .react-flow__attribution {
   display: none;
+}
+
+/* Preset bar */
+.preset-bar {
+  padding: 0.65rem 1.1rem;
+  background: #111316;
+  border-bottom: 1px solid #1f2327;
+}
+
+.preset-grid {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.4rem;
+}
+
+.preset-btn {
+  background: #16181c;
+  border: 1px solid #26292e;
+  border-radius: 5px;
+  color: #9ca3af;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.preset-btn:hover {
+  background: #1f2327;
+  color: #e2e8f0;
+  border-color: #374151;
+}
+
+.preset-btn.active {
+  background: #14201a;
+  color: #6ee7b7;
+  border-color: #6ee7b7;
+}
+
+/* KPI cards */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 0.65rem;
+  padding: 0.65rem 1.1rem;
+  background: #0d0f12;
+  border-bottom: 1px solid #1f2327;
+}
+
+.kpi-card {
+  background: #131619;
+  border: 1px solid #1f2327;
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.kpi-label {
+  color: #6b7280;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.kpi-value {
+  color: #e2e8f0;
+  font-weight: 700;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Charts row */
+.charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.85rem;
+  padding: 0.85rem 1.1rem;
+}
+
+.charts-row .panel {
+  background: #131619;
+  border: 1px solid #1f2327;
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.charts-row .panel h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.charts-row .empty {
+  color: #4b5563;
+  font-size: 0.78rem;
+  padding: 1rem 0;
+  text-align: center;
 }
