@@ -124,8 +124,8 @@ body {
   overflow: visible;
 }
 
-/* Let page scroll when over canvas */
-.canvas-wrap .react-flow {
+/* Let page scroll when over canvas - only disable on the pane, not edges */
+.canvas-wrap .react-flow__pane {
   pointer-events: none;
 }
 
@@ -134,6 +134,10 @@ body {
 }
 
 .canvas-wrap .react-flow__controls {
+  pointer-events: auto;
+}
+
+.canvas-wrap .react-flow__edge {
   pointer-events: auto;
 }
 
